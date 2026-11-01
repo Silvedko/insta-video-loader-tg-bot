@@ -16,6 +16,19 @@ cp .env.example .env   # і впиши BOT_TOKEN
 python bot.py
 ```
 
+## Запуск на сервері (Ubuntu, напр. Oracle Cloud)
+
+```bash
+git clone https://github.com/Silvedko/insta-video-loader-tg-bot.git
+bash insta-video-loader-tg-bot/deploy.sh
+```
+
+Скрипт встановить усе потрібне, спитає токен і запустить бота як службу.
+Оновлення до свіжої версії: `bash ~/insta-video-loader-tg-bot/deploy.sh`.
+Логи: `sudo journalctl -u insta-bot -f`.
+
+Не запускай бота одночасно на сервері й на своєму комп'ютері — Telegram видасть помилку `Conflict`.
+
 ## Нюанси
 
 - Ліміт Telegram для ботів — 50 МБ на файл.
