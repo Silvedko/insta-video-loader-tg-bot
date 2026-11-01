@@ -1,4 +1,4 @@
-"""Telegram-бот: знаходить Instagram-посилання в повідомленнях,
+"""Telegram-бот: знаходить Instagram- і Facebook-посилання в повідомленнях,
 качає публічне відео і відповідає на повідомлення цим відео."""
 
 import asyncio
@@ -8,6 +8,7 @@ import re
 import shutil
 import tempfile
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import yt_dlp
 from dotenv import load_dotenv
@@ -18,7 +19,7 @@ from telegram.ext import Application, ContextTypes, MessageHandler, filters
 load_dotenv()
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-# Необов'язково: cookies.txt від залогіненого Instagram-акаунта (допомагає, коли Instagram просить логін)
+# Необов'язково: cookies.txt від залогінених Instagram/Facebook-акаунтів (допомагає, коли сайт просить логін)
 COOKIES_FILE = os.getenv("COOKIES_FILE") or None
 # Ліміт Telegram Bot API на відправку файлів — 50 МБ
 MAX_SIZE = 50 * 1024 * 1024
@@ -29,6 +30,21 @@ INSTAGRAM_RE = re.compile(
     r"https?://(?:www\.|m\.)?instagram\.com/(?:[\w.]+/)?(?:reel|reels|p|tv)/[\w-]+/?(?:\?[^\s]*)?",
     re.IGNORECASE,
 )
+FACEBOOK_RE = re.compile(
+    r"https?://(?:(?:www|m|web|mbasic)\.)?(?:"
+    r"facebook\.com/(?:"
+    r"reel/\d+"
+    r"|watch/?\?\S*?v=\d+"
+    r"|video\.php\?\S*?v=\d+"
+    r"|share/[vr]/[\w-]+"
+    r"|[\w.-]+/(?:videos|posts)/[\w.-]+(?:/\d+)?"
+    r")"
+    r"|fb\.watch/[\w-]+"
+    r")/?\S*",
+    re.IGNORECASE,
+)
+# Короткі посилання, що лише перенаправляють на справжню адресу відео
+FB_SHORT_RE = re.compile(r"fb\.watch/|facebook\.com/share/", re.IGNORECASE)
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO
@@ -38,14 +54,38 @@ log = logging.getLogger("insta-bot")
 
 
 def extract_links(text: str) -> list[str]:
-    """Унікальні Instagram-посилання в порядку появи."""
+    """Унікальні Instagram- і Facebook-посилання в порядку появи в тексті."""
+    text = text or ""
+    found = []
+    for m in INSTAGRAM_RE.finditer(text):
+        # У Instagram параметри після "?" (igsh=...) не потрібні
+        found.append((m.start(), m.group(0).split("?")[0]))
+    for m in FACEBOOK_RE.finditer(text):
+        # У Facebook параметри потрібні (watch?v=...), тож лише прибираємо розділові знаки в кінці
+        found.append((m.start(), m.group(0).rstrip(".,!?)]>»\"'")))
+
     seen, result = set(), []
-    for m in INSTAGRAM_RE.finditer(text or ""):
-        url = m.group(0).split("?")[0]
+    for _, url in sorted(found):
         if url not in seen:
             seen.add(url)
             result.append(url)
     return result
+
+
+def resolve_short_link(ydl: yt_dlp.YoutubeDL, url: str) -> str:
+    """fb.watch/... і facebook.com/share/... → справжня адреса відео."""
+    try:
+        with ydl.urlopen(url) as resp:
+            final = resp.url
+    except Exception:
+        log.warning("Не вдалося розкрити коротке посилання %s", url, exc_info=True)
+        return url
+    # Facebook іноді перекидає на сторінку логіну, а справжня адреса лежить у параметрі next
+    nxt = parse_qs(urlparse(final).query).get("next")
+    if "/login" in final and nxt:
+        final = nxt[0]
+    log.info("Коротке посилання %s → %s", url, final)
+    return final
 
 
 def download(url: str, out_dir: str) -> list[Path]:
@@ -65,6 +105,8 @@ def download(url: str, out_dir: str) -> list[Path]:
         opts["cookiefile"] = COOKIES_FILE
 
     with yt_dlp.YoutubeDL(opts) as ydl:
+        if FB_SHORT_RE.search(url):
+            url = resolve_short_link(ydl, url)
         ydl.download([url])
 
     files = sorted(

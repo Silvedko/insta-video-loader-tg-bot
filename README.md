@@ -1,7 +1,11 @@
-# Instagram → Telegram бот
+# Instagram / Facebook → Telegram бот
 
-Бот бачить Instagram-посилання (reel / p / tv) у повідомленні, качає публічне відео
+Бот бачить у повідомленні посилання на відео з Instagram або Facebook, качає публічне відео
 і відправляє його як відповідь (Reply) на це повідомлення.
+
+Підтримувані посилання:
+- **Instagram:** `instagram.com/reel/…`, `/p/…`, `/tv/…`
+- **Facebook:** `facebook.com/reel/…`, `/watch?v=…`, `/<сторінка>/videos/…`, `/share/v/…`, `/share/r/…`, `fb.watch/…`
 
 ## Запуск
 
@@ -33,7 +37,9 @@ bash insta-video-loader-tg-bot/deploy.sh
 
 - Ліміт Telegram для ботів — 50 МБ на файл.
 - Якщо пост — фото або приватний, бот мовчить (пише в лог).
-- Instagram іноді блокує анонімні запити. Тоді експортуй cookies зі свого браузера
+- Instagram і Facebook іноді блокують анонімні запити. Тоді експортуй cookies зі свого браузера
   (розширення «Get cookies.txt LOCALLY») і вкажи шлях у `COOKIES_FILE`.
+  Якщо потрібні cookies для обох сайтів — експортуй їх по черзі з instagram.com і facebook.com
+  і склей вміст в один файл.
 - Якщо щось перестало качатися — онови yt-dlp: `pip install -U yt-dlp`.
 - Бажано встановити ffmpeg — тоді yt-dlp зможе зклеювати відео й аудіо, якщо Instagram віддає їх окремо.
