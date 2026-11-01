@@ -1,11 +1,12 @@
-# Instagram / Facebook → Telegram бот
+# Instagram / Facebook / TikTok → Telegram бот
 
-Бот бачить у повідомленні посилання на відео з Instagram або Facebook, качає публічне відео
+Бот бачить у повідомленні посилання на відео з Instagram, Facebook або TikTok, качає публічне відео
 і відправляє його як відповідь (Reply) на це повідомлення.
 
 Підтримувані посилання:
 - **Instagram:** `instagram.com/reel/…`, `/p/…`, `/tv/…`
 - **Facebook:** `facebook.com/reel/…`, `/watch?v=…`, `/<сторінка>/videos/…`, `/share/v/…`, `/share/r/…`, `fb.watch/…`
+- **TikTok:** `tiktok.com/@<user>/video/…`, `vm.tiktok.com/…`, `vt.tiktok.com/…`, `tiktok.com/t/…`
 
 ## Запуск
 
@@ -37,9 +38,9 @@ bash insta-video-loader-tg-bot/deploy.sh
 
 - Ліміт Telegram для ботів — 50 МБ на файл.
 - Якщо пост — фото або приватний, бот мовчить (пише в лог).
-- Instagram і Facebook іноді блокують анонімні запити. Тоді експортуй cookies зі свого браузера
+- Instagram, Facebook і TikTok іноді блокують анонімні запити. Тоді експортуй cookies зі свого браузера
   (розширення «Get cookies.txt LOCALLY») і вкажи шлях у `COOKIES_FILE`.
-  Якщо потрібні cookies для обох сайтів — експортуй їх по черзі з instagram.com і facebook.com
+  Якщо потрібні cookies для кількох сайтів — експортуй їх по черзі (instagram.com, facebook.com, tiktok.com)
   і склей вміст в один файл.
 - Якщо щось перестало качатися — онови yt-dlp: `pip install -U yt-dlp`.
 - Бажано встановити ffmpeg — тоді yt-dlp зможе зклеювати відео й аудіо, якщо Instagram віддає їх окремо.

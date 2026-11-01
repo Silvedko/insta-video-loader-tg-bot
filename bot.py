@@ -1,4 +1,4 @@
-"""Telegram-бот: знаходить Instagram- і Facebook-посилання в повідомленнях,
+"""Telegram-бот: знаходить Instagram-, Facebook- і TikTok-посилання в повідомленнях,
 качає публічне відео і відповідає на повідомлення цим відео."""
 
 import asyncio
@@ -45,6 +45,12 @@ FACEBOOK_RE = re.compile(
 )
 # Короткі посилання, що лише перенаправляють на справжню адресу відео
 FB_SHORT_RE = re.compile(r"fb\.watch/|facebook\.com/share/", re.IGNORECASE)
+TIKTOK_RE = re.compile(
+    r"https?://(?:(?:www|m)\.)?tiktok\.com/@[\w.-]+/video/\d+"
+    r"|https?://(?:vm|vt)\.tiktok\.com/[\w-]+"
+    r"|https?://(?:www\.)?tiktok\.com/t/[\w-]+",
+    re.IGNORECASE,
+)
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO
@@ -54,12 +60,15 @@ log = logging.getLogger("insta-bot")
 
 
 def extract_links(text: str) -> list[str]:
-    """Унікальні Instagram- і Facebook-посилання в порядку появи в тексті."""
+    """Унікальні Instagram-, Facebook- і TikTok-посилання в порядку появи в тексті."""
     text = text or ""
     found = []
     for m in INSTAGRAM_RE.finditer(text):
         # У Instagram параметри після "?" (igsh=...) не потрібні
         found.append((m.start(), m.group(0).split("?")[0]))
+    for m in TIKTOK_RE.finditer(text):
+        # У TikTok параметри після "?" (is_from_webapp=..., _t=...) не потрібні
+        found.append((m.start(), m.group(0)))
     for m in FACEBOOK_RE.finditer(text):
         # У Facebook параметри потрібні (watch?v=...), тож лише прибираємо розділові знаки в кінці
         found.append((m.start(), m.group(0).rstrip(".,!?)]>»\"'")))
@@ -95,6 +104,8 @@ def download(url: str, out_dir: str) -> list[Path]:
         # Спершу готовий mp4 з аудіо (не потрібен ffmpeg), інакше найкращий доступний
         "format": "b[ext=mp4][filesize<50M]/b[ext=mp4]/bv*[ext=mp4]+ba/b",
         "merge_output_format": "mp4",
+        # H.264 грає в усіх клієнтах Telegram; H.265 (його часто віддає TikTok) — не скрізь
+        "format_sort": ["vcodec:h264"],
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
