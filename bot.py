@@ -1,4 +1,4 @@
-"""Telegram-бот: знаходить Instagram- і Facebook-посилання в повідомленнях,
+"""Telegram-бот: знаходить Instagram-, Facebook- і TikTok-посилання в повідомленнях,
 качає публічне відео і відповідає на повідомлення цим відео."""
 
 import asyncio
@@ -30,6 +30,8 @@ MAX_VIDEOS_PER_LINK = 10
 
 BASE_OPTS = {
     "merge_output_format": "mp4",
+    # H.264 грає в усіх клієнтах Telegram; H.265 (його часто віддає TikTok) — не скрізь
+    "format_sort": ["vcodec:h264"],
     "quiet": True,
     "no_warnings": True,
     "noprogress": True,
@@ -74,6 +76,12 @@ FACEBOOK_RE = re.compile(
 )
 # Короткі посилання, що лише перенаправляють на справжню адресу відео
 FB_SHORT_RE = re.compile(r"fb\.watch/|facebook\.com/share/", re.IGNORECASE)
+TIKTOK_RE = re.compile(
+    r"https?://(?:(?:www|m)\.)?tiktok\.com/@[\w.-]+/video/\d+"
+    r"|https?://(?:vm|vt)\.tiktok\.com/[\w-]+"
+    r"|https?://(?:www\.)?tiktok\.com/t/[\w-]+",
+    re.IGNORECASE,
+)
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO
@@ -83,12 +91,15 @@ log = logging.getLogger("insta-bot")
 
 
 def extract_links(text: str) -> list[str]:
-    """Унікальні Instagram- і Facebook-посилання в порядку появи в тексті."""
+    """Унікальні Instagram-, Facebook- і TikTok-посилання в порядку появи в тексті."""
     text = text or ""
     found = []
     for m in INSTAGRAM_RE.finditer(text):
         # У Instagram параметри після "?" (igsh=...) не потрібні
         found.append((m.start(), m.group(0).split("?")[0]))
+    for m in TIKTOK_RE.finditer(text):
+        # У TikTok параметри після "?" (is_from_webapp=..., _t=...) не потрібні
+        found.append((m.start(), m.group(0)))
     for m in FACEBOOK_RE.finditer(text):
         # У Facebook параметри потрібні (watch?v=...), тож лише прибираємо розділові знаки в кінці
         found.append((m.start(), m.group(0).rstrip(".,!?)]>»\"'")))
@@ -130,31 +141,33 @@ def estimated_size(info: dict) -> int | None:
     return int(total)
 
 
-def download_entry(entry: dict, out_dir: str) -> tuple[Path | None, bool]:
+def download_entry(ydl: yt_dlp.YoutubeDL, entry: dict, out_dir: str) -> tuple[Path | None, bool]:
     """Качає одне відео, знижуючи якість, доки файл не влізе в 50 МБ.
-    Повертає (файл або None, чи траплявся варіант більший за ліміт)."""
+    Повертає (файл або None, чи траплявся варіант більший за ліміт).
+
+    Усі спроби йдуть через той самий ydl, що й пошук відео: TikTok під час пошуку
+    видає cookie, без якого саме відео не віддає (HTTP 403)."""
     os.makedirs(out_dir, exist_ok=True)
     tried: set[str] = set()
     too_big = False
 
     for spec in FORMAT_LADDER:
         attempt_dir = tempfile.mkdtemp(dir=out_dir)
-        opts = {**BASE_OPTS, "format": spec,
-                "outtmpl": os.path.join(attempt_dir, "%(id)s.%(ext)s")}
+        ydl.format_selector = ydl.build_format_selector(spec)
+        ydl.params["paths"] = {"home": attempt_dir}
         try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                # Спершу лише вибираємо формат (без завантаження) і оцінюємо розмір
-                info = ydl.process_ie_result(copy.deepcopy(entry), download=False)
-                fmt = info.get("format_id")
-                if fmt in tried:
-                    continue  # цей самий формат уже пробували
-                tried.add(fmt)
-                est = estimated_size(info)
-                if est and est > MAX_SIZE * 1.1:
-                    log.info("Формат %s ~%d МБ — завеликий, пробую нижчу якість", fmt, est >> 20)
-                    too_big = True
-                    continue
-                ydl.process_ie_result(copy.deepcopy(entry), download=True)
+            # Спершу лише вибираємо формат (без завантаження) і оцінюємо розмір
+            info = ydl.process_ie_result(copy.deepcopy(entry), download=False)
+            fmt = info.get("format_id")
+            if fmt in tried:
+                continue  # цей самий формат уже пробували
+            tried.add(fmt)
+            est = estimated_size(info)
+            if est and est > MAX_SIZE * 1.1:
+                log.info("Формат %s ~%d МБ — завеликий, пробую нижчу якість", fmt, est >> 20)
+                too_big = True
+                continue
+            ydl.process_ie_result(copy.deepcopy(entry), download=True)
         except Exception as e:
             log.debug("Варіант якості %r не підійшов: %s", spec, e)
             continue
@@ -175,35 +188,36 @@ def download_entry(entry: dict, out_dir: str) -> tuple[Path | None, bool]:
 def download(url: str, out_dir: str) -> tuple[list[Path], int]:
     """Качає всі відео з посту.
     Повертає (файли, скільки відео не вдалося вмістити в 50 МБ навіть у найнижчій якості)."""
-    try:
-        with yt_dlp.YoutubeDL(BASE_OPTS) as ydl:
+    opts = {**BASE_OPTS, "outtmpl": "%(id)s.%(ext)s"}
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        try:
             if FB_SHORT_RE.search(url):
                 url = resolve_short_link(ydl, url)
             # Лише інформація про пост, без вибору формату та завантаження
             raw = ydl.extract_info(url, download=False, process=False)
-    except Exception as e:
-        log.info("Не вдалося отримати відео з %s: %s", url, e)
-        return [], 0
-    if not raw:
-        return [], 0
+        except Exception as e:
+            log.info("Не вдалося отримати відео з %s: %s", url, e)
+            return [], 0
+        if not raw:
+            return [], 0
 
-    if raw.get("_type") == "playlist":  # карусель з кількох відео/фото
-        entries = [e for e in itertools.islice(raw.get("entries") or [], MAX_VIDEOS_PER_LINK) if e]
-        for e in entries:
-            for key in ("extractor", "extractor_key", "webpage_url", "original_url"):
-                if raw.get(key):
-                    e.setdefault(key, raw[key])
-    else:
-        entries = [raw]
+        if raw.get("_type") == "playlist":  # карусель з кількох відео/фото
+            entries = [e for e in itertools.islice(raw.get("entries") or [], MAX_VIDEOS_PER_LINK) if e]
+            for e in entries:
+                for key in ("extractor", "extractor_key", "webpage_url", "original_url"):
+                    if raw.get(key):
+                        e.setdefault(key, raw[key])
+        else:
+            entries = [raw]
 
-    files, too_big = [], 0
-    for n, entry in enumerate(entries, 1):
-        f, big = download_entry(entry, os.path.join(out_dir, str(n)))
-        if f:
-            files.append(f)
-        elif big:
-            too_big += 1
-    return files, too_big
+        files, too_big = [], 0
+        for n, entry in enumerate(entries, 1):
+            f, big = download_entry(ydl, entry, os.path.join(out_dir, str(n)))
+            if f:
+                files.append(f)
+            elif big:
+                too_big += 1
+        return files, too_big
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
