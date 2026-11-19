@@ -4,10 +4,12 @@
 import asyncio
 import copy
 import itertools
+import json
 import logging
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -32,6 +34,8 @@ BASE_OPTS = {
     "merge_output_format": "mp4",
     # H.264 грає в усіх клієнтах Telegram; H.265 (його часто віддає TikTok) — не скрізь
     "format_sort": ["vcodec:h264"],
+    # moov на початку файлу — Telegram може програвати відео ще до повного завантаження
+    "postprocessor_args": {"merger": ["-movflags", "+faststart"]},
     "quiet": True,
     "no_warnings": True,
     "noprogress": True,
@@ -220,6 +224,50 @@ def download(url: str, out_dir: str) -> tuple[list[Path], int]:
         return files, too_big
 
 
+def video_meta(path: Path) -> dict:
+    """Ширина, висота й тривалість відео для Telegram.
+    Без них Telegram вгадує пропорції сам і іноді показує відео квадратним або розтягнутим.
+    Повертає {} , якщо ffprobe недоступний."""
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries",
+             "stream=width,height,sample_aspect_ratio:stream_tags=rotate"
+             ":stream_side_data=rotation:format=duration",
+             "-of", "json", str(path)],
+            capture_output=True, text=True, timeout=30, check=True,
+        ).stdout
+        data = json.loads(out)
+        stream = data["streams"][0]
+        w, h = int(stream["width"]), int(stream["height"])
+    except Exception:
+        return {}
+
+    # Нестандартні (не квадратні) пікселі: реальна ширина кадру інша, ніж у пікселях
+    try:
+        num, den = map(int, stream.get("sample_aspect_ratio", "1:1").split(":"))
+        if num > 0 and den > 0 and num != den:
+            w = round(w * num / den)
+    except ValueError:
+        pass
+
+    # Відео з телефона, зняте вертикально, може зберігатися горизонтально з позначкою «повернути»
+    rotation = stream.get("tags", {}).get("rotate")
+    for side in stream.get("side_data_list", []):
+        rotation = side.get("rotation", rotation)
+    try:
+        if rotation is not None and abs(int(float(rotation))) % 180 == 90:
+            w, h = h, w
+    except ValueError:
+        pass
+
+    meta = {"width": w, "height": h}
+    duration = data.get("format", {}).get("duration")
+    if duration:
+        meta["duration"] = round(float(duration))
+    return meta
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     if not message:
@@ -247,9 +295,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 continue
 
             for f in files:
+                meta = video_meta(f)
                 with f.open("rb") as video:
                     await message.reply_video(
                         video=video,
+                        **meta,
                         supports_streaming=True,
                         do_quote=True,
                         read_timeout=120,
