@@ -6,3 +6,5 @@ __pycache__/
 venv/
 *.key
 %USERPROFILE%/
+stats.db
+.stats_salt

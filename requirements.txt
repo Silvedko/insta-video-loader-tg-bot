@@ -1,3 +1,4 @@
 python-telegram-bot>=21.0
 yt-dlp[default,curl-cffi]
 python-dotenv
+tzdata; sys_platform == 'win32'

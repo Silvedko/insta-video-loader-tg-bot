@@ -16,9 +16,11 @@ from urllib.parse import parse_qs, urlparse
 
 import yt_dlp
 from dotenv import load_dotenv
-from telegram import Update
-from telegram.constants import ChatAction
-from telegram.ext import Application, ContextTypes, MessageHandler, filters
+from telegram import BotCommand, Update
+from telegram.constants import ChatAction, ParseMode
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+
+from stats import Stats, platform_of
 
 load_dotenv()
 
@@ -29,6 +31,8 @@ COOKIES_FILE = os.getenv("COOKIES_FILE") or None
 MAX_SIZE = 50 * 1024 * 1024
 # Скільки відео максимум надсилати з одного посту-каруселі
 MAX_VIDEOS_PER_LINK = 10
+# Файл статистики (лічильник лінків і завантажень)
+STATS = Stats(os.getenv("STATS_DB") or "stats.db")
 
 BASE_OPTS = {
     "merge_output_format": "mp4",
@@ -277,8 +281,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not links:
         return
 
+    user_id = message.from_user.id if message.from_user else None
     for url in links:
         tmp = tempfile.mkdtemp(prefix="video_")
+        status = "failed"
         try:
             await context.bot.send_chat_action(message.chat_id, ChatAction.UPLOAD_VIDEO)
             files, too_big = await asyncio.to_thread(download, url, tmp)
@@ -289,6 +295,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     "Telegram не дозволяє ботам надсилати такі файли.",
                     do_quote=True,
                 )
+            if too_big:
+                status = "too_big"
             if not files:
                 if not too_big:
                     log.info("Відео не знайдено (фото/приватний пост?): %s", url)
@@ -305,15 +313,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                         read_timeout=120,
                         write_timeout=120,
                     )
+                status = "sent"
             log.info("Надіслано %d відео з %s", len(files), url)
         except Exception:
             log.exception("Не вдалося обробити %s", url)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+            STATS.record(platform_of(url), status, user_id)
+
+
+async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.effective_message.reply_text(
+        STATS.summary_html(), parse_mode=ParseMode.HTML, do_quote=True
+    )
+
+
+async def post_init(app: Application) -> None:
+    # Команда з'явиться в меню бота в Telegram
+    await app.bot.set_my_commands([BotCommand("stats", "Статистика завантажень")])
 
 
 def main() -> None:
-    app = Application.builder().token(BOT_TOKEN).concurrent_updates(True).build()
+    app = (
+        Application.builder().token(BOT_TOKEN).concurrent_updates(True)
+        .post_init(post_init).build()
+    )
+    app.add_handler(CommandHandler("stats", handle_stats))
     app.add_handler(
         MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND, handle_message)
     )
