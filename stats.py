@@ -110,6 +110,10 @@ class Stats:
             start = now - timedelta(days=days)
         return start.strftime(TS_FMT)
 
+    def total_sent(self) -> int:
+        """Скільки разів бот надіслав відео за весь час (для всіх користувачів)."""
+        return self.db.execute("SELECT COUNT(*) FROM events WHERE status = 'sent'").fetchone()[0]
+
     def summary_html(self) -> str:
         """Текст для команди /stats (HTML-розмітка Telegram)."""
         lines = [f"{'':9}{'Лінки':>6}{'Ок':>6}{'Збій':>6}{'Вел.':>6}{'Люди':>6}"]
