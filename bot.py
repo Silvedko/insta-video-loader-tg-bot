@@ -33,8 +33,18 @@ MAX_SIZE = 50 * 1024 * 1024
 MAX_VIDEOS_PER_LINK = 10
 # Файл статистики (лічильник лінків і завантажень)
 STATS = Stats(os.getenv("STATS_DB") or "stats.db")
-# Telegram ID власника (через кому, якщо кілька): лише вони бачать повну статистику в /stats
-ADMIN_IDS = {int(x) for x in re.findall(r"\d+", os.getenv("ADMIN_IDS", ""))}
+# Власник бота: лише він бачить повну статистику в /stats
+# Числові ID і/або username (з @ чи без), через кому
+_ADMINS = [a.strip().lstrip("@").lower() for a in os.getenv("ADMIN_IDS", "").split(",") if a.strip()]
+ADMIN_IDS = {int(a) for a in _ADMINS if a.isdigit()}
+ADMIN_USERNAMES = {a for a in _ADMINS if not a.isdigit()}
+
+
+def is_admin(user) -> bool:
+    if not user:
+        return False
+    return user.id in ADMIN_IDS or (user.username or "").lower() in ADMIN_USERNAMES
+
 
 BASE_OPTS = {
     "merge_output_format": "mp4",
@@ -327,7 +337,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def handle_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     user = update.effective_user
-    if user and user.id in ADMIN_IDS:
+    if is_admin(user):
         text = STATS.summary_html()
     else:
         text = f"📥 Бот уже завантажив відео: <b>{STATS.total_sent()}</b>"
